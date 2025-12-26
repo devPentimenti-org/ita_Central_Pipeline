@@ -1,0 +1,217 @@
+name: PR check and Code Quality analysis
+
+on:
+  workflow_call:   
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+  actions: read
+  checks: write
+
+jobs:
+  quality-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate PR
+        uses: neofinancial/ticket-check-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ticketLink: 'https://pentimenti1.atlassian.net/browse/PD-%ticketNumber%'
+          ticketPrefix: 'PD-'
+          titleRegex: '^PD-(?<ticketNumber>\d+)'  # Fetch ticket number from the PR title
+          titleFormat: '%prefix%%id%: %title%'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.8.3
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          virtualenvs-path: .venv
+          installer-parallel: true
+
+      
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Check poetry lock
+        run: poetry check --lock
+
+      - name: Check black formatting
+        run: poetry run black . --check
+          
+      - name: Check import sort
+        run: poetry run isort . --check --gitignore --dont-follow-links
+    
+
+      # Ruff
+      - name: Run Ruff
+        run: |
+          poetry run ruff check . --output-format=json > ruff.json || true
+      - name: Analyze Ruff results
+        run: |
+          echo "RUFF_SMELLS=0" >> $GITHUB_ENV
+          echo "UNUSED_IMPORTS=0" >> $GITHUB_ENV
+          if [ -s ruff.json ] && jq -e 'type == "array"' ruff.json >/dev/null; then
+            UNUSED=$(jq '[.[].code | select(. == "F401" or . == "F811")] | length' ruff.json)
+            TOTAL=$(jq 'length' ruff.json)
+            SMELLS=$(( TOTAL - UNUSED ))
+            echo "RUFF_SMELLS=$SMELLS" >> $GITHUB_ENV
+            echo "UNUSED_IMPORTS=$UNUSED" >> $GITHUB_ENV
+          fi
+
+
+      # Bandit
+      - name: Run Bandit Security Scan
+        run: |
+          poetry run bandit -r . \
+            --exclude ./tests,./.venv,__pycache__ \
+            --skip B101,B311,B303,B410,B602,B603,B607,B404,B108 \
+            --exit-zero -f json -o bandit.json || true
+      - name: Count Security Issues
+        run: |
+          echo "SECURITY_ISSUES=0" >> $GITHUB_ENV
+          if [ -f bandit.json ] && jq -e '.results' bandit.json >/dev/null; then
+            echo "SECURITY_ISSUES=$(jq '.results | length' bandit.json)" >> $GITHUB_ENV
+          fi
+
+
+
+      # Generate Summary Report
+      - name: Generate Summary Report
+        id: summary
+        run: |
+          REPORT="## Code Quality & Test Summary
+         
+          | Metric                        | Value                  |
+          |-------------------------------|------------------------|
+          | Code Smells (Ruff)            | ${{ env.RUFF_SMELLS }}  |
+          | Unused Imports (Ruff)         | ${{ env.UNUSED_IMPORTS }} |
+          | Security Issues (Bandit)      | ${{ env.SECURITY_ISSUES }} |
+          > Report generated on $(date '+%Y-%m-%d at %H:%M UTC')"
+          echo "$REPORT" >> $GITHUB_STEP_SUMMARY
+          echo "summary<<EOF" >> $GITHUB_OUTPUT
+          echo "$REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Comment PR - Summary
+        if: github.event_name == 'pull_request'
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          comment_tag: code-quality-summary
+          message: ${{ steps.summary.outputs.summary || 'No quality summary generated.' }}
+
+      # Ruff Code Smells Report
+      - name: Generate Ruff Code Smells Report
+        id: ruff_smells
+        run: |
+          if [ "${{ env.RUFF_SMELLS }}" -eq 0 ]; then
+            SMELLS_TABLE="| No code smells found (excluding unused imports). | | | | |"
+          else
+            SMELLS_TABLE=$(jq -r '
+              [ .[] | select(.code != "F401" and .code != "F811") ]
+              | sort_by(.filename, .location.row)
+              | to_entries[]
+              | "| \(.key + 1) | \(.value.code) | \(.value.location.row) | \(.value.filename) | \(.value.message) |"
+            ' ruff.json)
+          fi
+          RUFF_REPORT="## Code Smells (Ruff)
+          Found **${{ env.RUFF_SMELLS }}** code smell(s).
+          | S No | Rule   | Line | Path              | Message                              |
+          |------|--------|------|-------------------|--------------------------------------|
+          $SMELLS_TABLE
+          > Completed on $(date '+%Y-%m-%d at %H:%M UTC')"
+          echo "$RUFF_REPORT" >> $GITHUB_STEP_SUMMARY
+          echo "ruff_report<<EOF" >> $GITHUB_OUTPUT
+          echo "$RUFF_REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Comment PR - Ruff Code Smells Report
+        if: github.event_name == 'pull_request' && env.RUFF_SMELLS != '0'
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          comment_tag: ruff-smells-report
+          message: ${{ steps.ruff_smells.outputs.ruff_report || 'No Ruff issues.' }}
+
+      # Unused Imports Report
+      - name: Generate Unused Imports Report
+        id: unused_imports
+        run: |
+          if [ "${{ env.UNUSED_IMPORTS }}" -eq 0 ]; then
+            UNUSED_TABLE="| No unused imports found. | | | | |"
+          else
+            UNUSED_TABLE=$(jq -r '
+              [ .[] | select(.code == "F401" or .code == "F811") ]
+              | sort_by(.filename, .location.row)
+              | to_entries[]
+              | "| \(.key + 1) | \(.value.code) | \(.value.location.row) | \(.value.filename) | \(.value.message) |"
+            ' ruff.json)
+          fi
+          UNUSED_REPORT="## Unused Imports (Ruff F401/F811)
+          Found **${{ env.UNUSED_IMPORTS }}** unused import(s).
+          | S No | Rule   | Line | Path              | Message                              |
+          |------|--------|------|-------------------|--------------------------------------|
+          $UNUSED_TABLE
+          > Completed on $(date '+%Y-%m-%d at %H:%M UTC')"
+          echo "$UNUSED_REPORT" >> $GITHUB_STEP_SUMMARY
+          echo "unused_report<<EOF" >> $GITHUB_OUTPUT
+          echo "$UNUSED_REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Comment PR - Unused Imports Report
+        if: github.event_name == 'pull_request' && env.UNUSED_IMPORTS != '0'
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          comment_tag: unused-imports-report
+          message: ${{ steps.unused_imports.outputs.unused_report || 'No unused imports.' }}
+
+      # Bandit Report
+      - name: Generate Bandit Detailed Report
+        id: bandit
+        run: |
+          if [ "${{ env.SECURITY_ISSUES }}" -eq 0 ]; then
+            SECURITY_TABLE="| No security issues found. | | | | |"
+          else
+            SECURITY_TABLE=$(jq -r '
+              .results
+              | sort_by(.filename, .line_number)
+              | to_entries[]
+              | "| \(.key + 1) | \(.value.test_id) | \(.value.line_number // "N/A") | \(.value.filename) | \(.value.issue_text // "No message") |"
+            ' bandit.json)
+          fi
+          BANDIT_REPORT="## Security Vulnerabilities (Bandit)
+          Found **${{ env.SECURITY_ISSUES }}** security issue(s).
+          | S No | Rule       | Line   | Path                  | Message                              |
+          |------|------------|--------|-----------------------|--------------------------------------|
+          $SECURITY_TABLE
+          > Completed on $(date '+%Y-%m-%d at %H:%M UTC')"
+          echo "$BANDIT_REPORT" >> $GITHUB_STEP_SUMMARY
+          echo "bandit_report<<EOF" >> $GITHUB_OUTPUT
+          echo "$BANDIT_REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+
+      - name: Comment PR - Bandit Security Report
+        if: github.event_name == 'pull_request' && env.SECURITY_ISSUES != '0'
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          comment_tag: bandit-security-report
+          message: ${{ steps.bandit.outputs.bandit_report || 'No security issues.' }}
+
+
+      - name: Zip artifact for deployment pre-build
+        run: zip release.zip ./* -r
+          --exclude 'tests/*' \
+          --exclude 'penti_mongodb_store/tests/*'
+          --exclude 'test.out/*'
