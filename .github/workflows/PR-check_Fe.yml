@@ -46,38 +46,37 @@ jobs:
         run: npx prettier --check . || true
 
       - name: Run ESLint
-        run: |
-          npx eslint . -f json -o eslint.json || true
+        run: npx eslint . -f json -o eslint.json || true
 
       - name: Analyze ESLint results
         run: |
-          echo "ESLINT_SMELLS=0" >> $GITHUB_ENV
-          echo "UNUSED_VARS=0" >> $GITHUB_ENV
           if [ -s eslint.json ]; then
-          UNUSED=$(jq '[.[].messages[] | select(.ruleId=="no-unused-vars")] | length' eslint.json)
-          TOTAL=$(jq '[.[].messages[] | select(.ruleId != null)] | length' eslint.json)
-          SMELLS=$(( TOTAL - UNUSED ))
-
+            UNUSED=$(jq '[.[].messages[] | select(.ruleId=="no-unused-vars")] | length' eslint.json)
+            TOTAL=$(jq '[.[].messages[] | select(.ruleId != null)] | length' eslint.json)
+            SMELLS=$(( TOTAL - UNUSED ))
+          else
+            UNUSED=0
+            SMELLS=0
+          fi
           echo "UNUSED_VARS=$UNUSED" >> $GITHUB_ENV
           echo "ESLINT_SMELLS=$SMELLS" >> $GITHUB_ENV
-          fi
 
       - name: Install Semgrep
         run: |
-          pip install semgrep
+          pip install --user semgrep
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-
       - name: Run Semgrep Security Scan
-        run: |
-          npx semgrep scan --config=auto --json > semgrep.json || true
+        run: semgrep scan --config=auto --json > semgrep.json || true
 
       - name: Count Security Issues
         run: |
-          echo "SECURITY_ISSUES=0" >> $GITHUB_ENV
           if [ -s semgrep.json ]; then
-            echo "SECURITY_ISSUES=$(jq '.results | length' semgrep.json)" >> $GITHUB_ENV
+            SECURITY_ISSUES=$(jq '.results | length' semgrep.json)
+          else
+            SECURITY_ISSUES=0
           fi
+          echo "SECURITY_ISSUES=$SECURITY_ISSUES" >> $GITHUB_ENV
 
       - name: Run Tests with Coverage
         if: ${{ inputs.run-tests }}
@@ -86,7 +85,11 @@ jobs:
       - name: Extract Coverage Percentage
         if: ${{ inputs.run-tests }}
         run: |
-          COVERAGE=$(jq '.total.lines.pct // 0' coverage/coverage-summary.json | cut -d. -f1)
+          if [ -f coverage/coverage-summary.json ]; then
+            COVERAGE=$(jq '.total.lines.pct // 0' coverage/coverage-summary.json | cut -d. -f1)
+          else
+            COVERAGE=0
+          fi
           echo "COVERAGE_PERCENT=$COVERAGE" >> $GITHUB_ENV
 
       - name: Upload Coverage Artifact
@@ -102,11 +105,11 @@ jobs:
           REPORT="## Code Quality & Test Summary
 
           | Metric                     | Value |
-          |---------------------------|-------|
-          | Code Smells (ESLint)      | ${{ env.ESLINT_SMELLS }} |
-          | Unused Variables          | ${{ env.UNUSED_VARS }} |
-          | Security Issues (Semgrep) | ${{ env.SECURITY_ISSUES }} |
-          | Test Coverage             | ${{ env.COVERAGE_PERCENT }}% |
+          |----------------------------|-------|
+          | Code Smells (ESLint)       | ${{ env.ESLINT_SMELLS }} |
+          | Unused Variables           | ${{ env.UNUSED_VARS }} |
+          | Security Issues (Semgrep)  | ${{ env.SECURITY_ISSUES }} |
+          | Test Coverage              | ${{ env.COVERAGE_PERCENT }}% |
 
           > Generated on $(date '+%Y-%m-%d %H:%M UTC')"
           echo "$REPORT" >> $GITHUB_STEP_SUMMARY
@@ -125,13 +128,11 @@ jobs:
         id: eslint_smells
         run: |
           if [ "${{ env.ESLINT_SMELLS }}" -eq 0 ]; then
-            TABLE="| No code smells found | | | | |"
+            TABLE="| No code smells found | | | |"
           else
             TABLE=$(jq -r '
-              .[]
-              | .messages[]
-              | select(.ruleId != "no-unused-vars")
-              | "| - | \(.ruleId) | \(.line) | \(.message) |"
+              .[] | .messages[] | select(.ruleId != "no-unused-vars") | 
+              "| - | \(.ruleId) | \(.line) | \(.message) |"
             ' eslint.json)
           fi
           REPORT="## Code Smells (ESLint)
@@ -143,7 +144,6 @@ jobs:
           echo "$REPORT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-
       - name: Generate Security Report
         id: semgrep
         run: |
@@ -151,8 +151,7 @@ jobs:
             TABLE="| No security issues found | | | |"
           else
             TABLE=$(jq -r '
-              .results[]
-              | "| \(.check_id) | \(.path) | \(.start.line) | \(.extra.message) |"
+              .results[] | "| \(.check_id) | \(.path) | \(.start.line) | \(.extra.message) |"
             ' semgrep.json)
           fi
           REPORT="## Security Vulnerabilities (Semgrep)
@@ -170,5 +169,3 @@ jobs:
         with:
           comment_tag: js-security-report
           message: ${{ steps.semgrep.outputs.report }}
-
-  
