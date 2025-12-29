@@ -61,6 +61,9 @@ jobs:
             echo "UNUSED_VARS=$UNUSED" >> $GITHUB_ENV
           fi
 
+      - name: Install Semgrep
+        run: pip install semgrep
+
       - name: Run Semgrep Security Scan
         run: |
           npx semgrep scan --config=auto --json > semgrep.json || true
