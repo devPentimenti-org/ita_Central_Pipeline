@@ -62,7 +62,10 @@ jobs:
           fi
 
       - name: Install Semgrep
-        run: pip install semgrep
+        run: |
+          pip install semgrep
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
 
       - name: Run Semgrep Security Scan
         run: |
@@ -71,7 +74,7 @@ jobs:
       - name: Count Security Issues
         run: |
           echo "SECURITY_ISSUES=0" >> $GITHUB_ENV
-          if [ -f semgrep.json ]; then
+          if [ -s semgrep.json ]; then
             echo "SECURITY_ISSUES=$(jq '.results | length' semgrep.json)" >> $GITHUB_ENV
           fi
 
