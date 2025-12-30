@@ -164,6 +164,42 @@ jobs:
           echo "$REPORT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+
+      - name: Generate Unused Imports / Variables Report
+        id: unused
+        run: |
+          if [ "${{ env.UNUSED_VARS }}" -eq 0 ]; then
+             TABLE="| No unused imports or variables found | | |"
+          else
+             TABLE=$(jq -r '
+             [
+               .[] | .filePath as $file |
+               .messages[] |
+               select(.ruleId | test("unused")) |
+              {
+                path: $file,
+                line: .line,
+                message: .message
+              }
+              ]
+            | to_entries
+            | .[]
+            | "| \(.key + 1) | \(.value.path) | \(.value.line) | \(.value.message) |"
+            ' lint.json)
+          fi
+
+          REPORT="## Unused Imports / Variables
+
+          | Sno | File Path | Line | Message |
+          |-----|----------|------|---------|
+          $TABLE"
+
+          echo "$REPORT" >> $GITHUB_STEP_SUMMARY
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          echo "$REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+
       - name: Generate Security Report
         id: semgrep
         run: |
