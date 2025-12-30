@@ -159,7 +159,14 @@ jobs:
           echo "$REPORT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Comment PR - Lint Code Smells
+        if: github.event_name == 'pull_request' && env.LINT_SMELLS != '0'
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          comment_tag: js-lint-report
+          message: ${{ steps.lint_smells.outputs.report }}
 
+          
       - name: Generate Security Report
         id: semgrep
         run: |
