@@ -55,7 +55,16 @@ jobs:
       - name: Analyze ESLint results
         run: |
           if [ -s lint.json ]; then
-            UNUSED=$(jq '[.[].messages[] | select(.ruleId=="no-unused-vars")] | length' lint.json)
+            UNUSED=$(jq '
+            [.[].messages[] 
+              | select(
+                .ruleId == "no-unused-vars" or
+                .ruleId == "@typescript-eslint/no-unused-vars" or
+                (.ruleId | startswith("unused-imports"))
+                )
+            ] | length
+            ' lint.json)
+
             TOTAL=$(jq '[.[].messages[] | select(.ruleId != null)] | length' lint.json)
             SMELLS=$(( TOTAL - UNUSED ))
           else
@@ -65,6 +74,7 @@ jobs:
 
           echo "UNUSED_VARS=$UNUSED" >> $GITHUB_ENV
           echo "LINT_SMELLS=$SMELLS" >> $GITHUB_ENV
+
           
       - name: Install Semgrep
         run: |
