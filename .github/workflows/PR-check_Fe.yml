@@ -178,11 +178,6 @@ jobs:
           echo "$REPORT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-
-      - name: Generate ESLint JSON report
-        run: |
-          npm run lint -- --format json > lint.json || true
-
       - name: Unused Imports / Variables Report
         shell: bash
         run: |
@@ -191,41 +186,41 @@ jobs:
           echo -e "Sno\tFile Path\tLine\tMessage"
 
           if [ ! -s lint.json ]; then
-            echo -e "-\t-\t-\tNo unused imports or variables found"
-            exit 0
+          echo -e "-\t-\t-\tNo unused imports or variables found"
+          exit 0
           fi
 
           RESULT=$(jq -r '
-            [
-              .[]
-              | select(.messages != null)
-              | .filePath as $file
-              | .messages[]
-              | select(
-                  .ruleId == "no-unused-vars"
-                  or .ruleId == "@typescript-eslint/no-unused-vars"
-                  or (.ruleId != null and (.ruleId | contains("unused")))
-                )
-              | {
-                  file: $file,
-                  line: (.line // "-"),
-                  message: .message
-                }
-            ]
-            | if length == 0 then
-                empty
-              else
-                to_entries[]
-                | "\(.key + 1)\t\(.value.file)\t\(.value.line)\t\(.value.message)"
-              end
-          ' lint.json)
+          [
+           .[]
+           | .filePath as $file
+           | .messages[]
+           | select(
+              .ruleId == "no-unused-vars"
+              or .ruleId == "@typescript-eslint/no-unused-vars"
+              or (.ruleId != null and (.ruleId | contains("unused")))
+            )
+            | {
+              file: $file,
+              line: (.line // "-"),
+              message: .message
+             }
+           ]
+           | if length == 0 then
+            empty
+          else
+             to_entries[]
+             | "\(.key + 1)\t\(.value.file)\t\(.value.line)\t\(.value.message)"
+            end
+           ' lint.json)
 
           if [ -z "$RESULT" ]; then
             echo -e "-\t-\t-\tNo unused imports or variables found"
           else
             echo "$RESULT"
-          fi      
-          
+          fi
+
+
       - name: Generate Security Report
         id: semgrep
         run: |
