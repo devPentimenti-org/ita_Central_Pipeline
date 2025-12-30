@@ -179,45 +179,53 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
 
-      - name: Generate Unused Imports / Variables Report
-        id: unused
+      - name: Generate ESLint JSON report
         run: |
-          if [ "${{ env.UNUSED_VARS }}" -eq 0 ]; then
-            TABLE="| No unused imports or variables found | | |"
-          else
-            TABLE=$(jq -r '
-            [
-              .[] | .filePath as $file |
-              .messages[] |
-              select(
-                (.ruleId == "no-unused-vars") or
-                (.ruleId == "@typescript-eslint/no-unused-vars") or
-                (.ruleId != null and (.ruleId | startswith("unused-imports")))
-              ) |
-              {
-                path: $file,
-                line: .line,
-                message: .message
-              }
-            ]
-            | to_entries
-            | .[]
-            | "| \(.key + 1) | \(.value.path) | \(.value.line) | \(.value.message) |"
-            ' lint.json)
+          npm run lint -- --format json > lint.json || true
+
+      - name: Unused Imports / Variables Report
+        shell: bash
+        run: |
+          echo ""
+          echo "Unused Imports / Variables"
+          echo -e "Sno\tFile Path\tLine\tMessage"
+
+          if [ ! -s lint.json ]; then
+            echo -e "-\t-\t-\tNo unused imports or variables found"
+            exit 0
           fi
 
-          REPORT="## Unused Imports / Variables
+          RESULT=$(jq -r '
+            [
+              .[]
+              | select(.messages != null)
+              | .filePath as $file
+              | .messages[]
+              | select(
+                  .ruleId == "no-unused-vars"
+                  or .ruleId == "@typescript-eslint/no-unused-vars"
+                  or (.ruleId != null and (.ruleId | contains("unused")))
+                )
+              | {
+                  file: $file,
+                  line: (.line // "-"),
+                  message: .message
+                }
+            ]
+            | if length == 0 then
+                empty
+              else
+                to_entries[]
+                | "\(.key + 1)\t\(.value.file)\t\(.value.line)\t\(.value.message)"
+              end
+          ' lint.json)
 
-          | Sno | File Path | Line | Message |
-          |-----|----------|------|---------|
-          $TABLE"
-
-          echo "$REPORT" >> $GITHUB_STEP_SUMMARY
-          echo "report<<EOF" >> $GITHUB_OUTPUT
-          echo "$REPORT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-
+          if [ -z "$RESULT" ]; then
+            echo -e "-\t-\t-\tNo unused imports or variables found"
+          else
+            echo "$RESULT"
+          fi      
+          
       - name: Generate Security Report
         id: semgrep
         run: |
