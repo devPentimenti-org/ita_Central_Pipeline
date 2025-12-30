@@ -166,19 +166,21 @@ jobs:
           comment_tag: js-lint-report
           message: ${{ steps.lint_smells.outputs.report }}
 
-          
+
       - name: Generate Security Report
         id: semgrep
         run: |
           if [ "${{ env.SECURITY_ISSUES }}" -eq 0 ]; then
-            TABLE="| No security issues found | | | |"
+             TABLE="| No security issues found | | | |"
           else
-            TABLE=$(jq -r '
-              .results[] | "| \(.check_id) | \(.path) | \(.start.line) | \(.extra.message) |"
-            ' semgrep.json)
+             TABLE=$(jq -r '
+             .results
+             | to_entries[]
+             | "| \(.key + 1) | \(.value.path) | \(.value.start.line) | \(.value.extra.message) |"
+             ' semgrep.json)
           fi
           REPORT="## Security Vulnerabilities (Semgrep)
-          | Rule | File | Line | Message |
+          | S No | File | Line | Message |
           |------|------|------|---------|
           $TABLE"
           echo "$REPORT" >> $GITHUB_STEP_SUMMARY
